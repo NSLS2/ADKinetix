@@ -51,8 +51,8 @@
  * @brief Function that instatiates a driver object. Called from IOC shell
  *
  */
-extern "C" int ADKinetixConfig(int deviceIndex, const char *portName) {
-    new ADKinetix(deviceIndex, portName);
+extern "C" int ADKinetixConfig(const char *portName, int cameraId) {
+    new ADKinetix(portName, cameraId);
     return (asynSuccess);
 }
 
@@ -502,13 +502,25 @@ void ADKinetix::getCurrentFrameDimensions(size_t *dims) {
                        this->cameraContext->region.pbin);
 }
 
+void ADKinetix::cleanupAfterErr(const char* functionName, const char* errorMsg){
+    ERR(errorMsg);
+    if (this->cameraContext != nullptr) {
+        if(this->cameraContext->isCamOpen)
+            pl_cam_close(this->cameraContext->hcam);
+        delete this->cameraContext;
+    }
+
+    pl_pvcam_uninit();
+    exit(1);
+}
+
 /**
  * @brief Main constructor for ADKinetix driver
  *
  * @param deviceIndex Device index as seen by PVCam
  * @param portName Unique asyn port name
  */
-ADKinetix::ADKinetix(int deviceIndex, const char *portName)
+ADKinetix::ADKinetix(const char *portName, int cameraId)
     : ADDriver(portName, 1, NUM_KTX_PARAMS, 0, 0, 0, 0, 0, 1, 0, 0) {
     const char *functionName = "ADKinetix";
     asynStatus status = asynSuccess;
@@ -538,14 +550,14 @@ ADKinetix::ADKinetix(int deviceIndex, const char *portName)
 
     // Get current SDK version
     uns16 sdkVersion;
-    int32 serialNumber;
     pl_pvcam_get_ver(&sdkVersion);
-    char sdkVersionStr[40], driverVersionStr[40], fwVersionStr[40], modelStr[40], vendorStr[40], serialNumberStr[40];
+    char sdkVersionStr[40];
     snprintf(sdkVersionStr, 40, "%d.%d.%d", (sdkVersion >> 8 & 0xFF), (sdkVersion >> 4 & 0xF),
              (sdkVersion >> 0 & 0xF));
     setStringParam(ADSDKVersion, sdkVersionStr);
 
     // Track current version of the driver
+    char driverVersionStr[40];
     snprintf(driverVersionStr, 40, "%d.%d.%d", 
             ADKINETIX_VERSION, ADKINETIX_REVISION, ADKINETIX_MODIFICATION);
     setStringParam(NDDriverVersion, driverVersionStr);
@@ -555,139 +567,177 @@ ADKinetix::ADKinetix(int deviceIndex, const char *portName)
     if (!pl_cam_get_total(&numCameras)) {
         reportKinetixError(functionName);
     } else if (numCameras <= 0) {
-        ERR("No cameras detected!");
-    } else if (numCameras < deviceIndex) {
-        ERR_ARGS("There are only %d detected cameras! Cannot open camera with index %d!",
-                 numCameras, deviceIndex);
+        cleanupAfterErr(functionName, "No cameras detected!");
     } else {
-        // Initialize fresh camera context
-        this->cameraContext = new (std::nothrow) CameraContext();
-        if (!this->cameraContext) {
-            ERR("Failed to create camera context!");
-        } else {
-            // Open Camera
-            pl_cam_get_name(deviceIndex, this->cameraContext->camName);
+        INFO_ARGS("Detected %d cameras.", numCameras);
+    }
+
+    INFO_ARGS("Attempting to open camera with ID %d...", cameraId);
+
+    // Initialize fresh camera context structure
+    this->cameraContext = new (std::nothrow) CameraContext();
+    if (!this->cameraContext) {
+        cleanupAfterErr(functionName, "Failed to allocate memory for camera context");
+    } 
+
+    // If camera ID is greater than the number of detected cameras, it is
+    // likely a serial number, check if there is a camera w/ the given serial
+    if (numCameras < cameraId) {
+        DEBUG_ARGS("Camera index %d is out of range, checking if it is a valid serial number...", cameraId);
+
+        for(int i = 0; i < numCameras; i++){
+            pl_cam_get_name(i, this->cameraContext->camName);
             if (!pl_cam_open(this->cameraContext->camName, &this->cameraContext->hcam,
-                             OPEN_EXCLUSIVE)) {
-                ERR_ARGS("Failed to open camera with name %s", this->cameraContext->camName);
+                         OPEN_EXCLUSIVE)) {
+                WARN_ARGS("Failed to open camera with name %s to check if serial number matches!", this->cameraContext->camName);
+                continue;
             } else {
                 this->cameraContext->isCamOpen = true;
-                INFO_ARGS("Opened camera...", this->cameraContext->camName);
 
-                // Camera is opened, collect model number, serial, and firmware information
-                uns16 fwVersion;
-                pl_get_param(this->cameraContext->hcam, PARAM_CAM_FW_VERSION, ATTR_CURRENT,
-                             (void *)&fwVersion);
-                snprintf(fwVersionStr, 40, "%d.%d", (fwVersion >> 8) & 0xFF,
-                         (fwVersion >> 0) & 0xFF);
-                setStringParam(ADFirmwareVersion, fwVersionStr);
+                int32 serialNumber;
+                pl_get_param(this->cameraContext->hcam, PARAM_CAMERA_PART_NUMBER, ATTR_CURRENT, (void *)&serialNumber);
 
-                pl_get_param(this->cameraContext->hcam, PARAM_CAMERA_PART_NUMBER, ATTR_CURRENT,
-                             (void *)&serialNumber);
-                snprintf(serialNumberStr, 40, "%d", serialNumber);
-                setStringParam(ADSerialNumber, serialNumberStr);
-
-                pl_get_param(this->cameraContext->hcam, PARAM_VENDOR_NAME, ATTR_CURRENT,
-                             (void *)vendorStr);
-                setStringParam(ADManufacturer, vendorStr);
-
-                pl_get_param(this->cameraContext->hcam, PARAM_PRODUCT_NAME, ATTR_CURRENT,
-                             (void *)modelStr);
-                setStringParam(ADModel, modelStr);
-
-                // Attempt to switch to microsecond min exposure resolution
-                setMinExpRes(KTX_MIN_EXP_RES_MS, KTX_MIN_EXP_RES_US);
-
-                // Get info about the interface used to communicate with the camera.
-                KTX_COMM_INTF interface = KTX_INTF_UNKNOWN;
-
-                int32 interfaceId;
-                pl_get_param(this->cameraContext->hcam, PARAM_CAM_INTERFACE_TYPE, ATTR_CURRENT,
-                             (void *)&interfaceId);
-
-                if (interfaceId == PL_CAM_IFC_TYPE_ETHERNET)
-                    interface = KTX_INTF_ETHERNET;
-                else if (interfaceId == PL_CAM_IFC_TYPE_VIRTUAL)
-                    interface = KTX_INTF_VIRTUAL;
-                else if (interfaceId == PL_CAM_IFC_TYPE_USB_1_1)
-                    interface = KTX_INTF_USB_1_1;
-                else if (interfaceId == PL_CAM_IFC_TYPE_USB_2_0)
-                    interface = KTX_INTF_USB_2_0;
-                else if (interfaceId == PL_CAM_IFC_TYPE_USB_3_0)
-                    interface = KTX_INTF_USB_3_0;
-                else if (interfaceId == PL_CAM_IFC_TYPE_USB_3_1)
-                    interface = KTX_INTF_USB_3_1;
-                else if (interfaceId == PL_CAM_IFC_TYPE_PCIE_X1)
-                    interface = KTX_INTF_PCIE_x1;
-                else if (interfaceId == PL_CAM_IFC_TYPE_PCIE_X4)
-                    interface = KTX_INTF_PCIE_x4;
-                else if (interfaceId == PL_CAM_IFC_TYPE_PCIE_X8)
-                    interface = KTX_INTF_PCIE_x8;
-                else if (interfaceId == PL_CAM_IFC_TYPE_PCIE)
-                    interface = KTX_INTF_PCIE;
-
-                setIntegerParam(KTX_CommInterface, interface);
-
-                // Get information about connected camera resolution
-                pl_get_param(this->cameraContext->hcam, PARAM_SER_SIZE, ATTR_CURRENT,
-                             (void *)&this->cameraContext->sensorResX);
-                pl_get_param(this->cameraContext->hcam, PARAM_PAR_SIZE, ATTR_CURRENT,
-                             (void *)&this->cameraContext->sensorResY);
-
-                setIntegerParam(ADMaxSizeX, this->cameraContext->sensorResX);
-                setIntegerParam(ADMaxSizeY, this->cameraContext->sensorResY);
-                INFO_ARGS("Model: %s | Resolution: %dx%d", modelStr,
-                          this->cameraContext->sensorResX, this->cameraContext->sensorResY);
-
-                INFO("Configuring default region to full sensor size...");
-                setIntegerParam(ADMinX, 0);
-                setIntegerParam(ADMinY, 0);
-                setIntegerParam(ADBinX, 1);
-                setIntegerParam(ADBinY, 1);
-                setIntegerParam(ADSizeX, this->cameraContext->sensorResX);
-                setIntegerParam(ADSizeY, this->cameraContext->sensorResY);
-                setIntegerParam(NDColorMode,
-                                NDColorModeMono);  // Only mono modes currently supported
-                callParamCallbacks();
-                updateCameraRegion();
-
-                // Reset any pre-configured post-processing setup.
-                pl_pp_reset(this->cameraContext->hcam);
-
-                // Retrieve speed table information
-                getSpeedTable();
-                printSpeedTable();
-
-                // Select default speed table mode
-                setIntegerParam(KTX_ReadoutPortIdx, 0);
-                setIntegerParam(KTX_SpeedIdx, 0);
-                setIntegerParam(KTX_GainIdx, 0);
-                selectSpeedTableMode();
-                callParamCallbacks();
-
-                // Register new frame callback function with PVCam SDK
-                if (PV_OK != pl_cam_register_callback_ex3(this->cameraContext->hcam,
-                                                          PL_CALLBACK_EOF, (void *)newFrameCallback,
-                                                          this->cameraContext)) {
-                    ERR("Failed to register callback function!");
+                if(serialNumber == cameraId){
+                    INFO_ARGS("Opened camera with serial number %d", serialNumber);
+                    break;
                 } else {
-                    INFO("Registered EOF callback function.");
-
-                    // Spawn the monitoring thread. Make sure it's joinable.
-                    INFO("Spawning camera monitor thread...");
-                    this->monitoringActive = true;
-
-                    epicsThreadOpts opts;
-                    opts.priority = epicsThreadPriorityMedium;
-                    opts.stackSize = epicsThreadGetStackSize(epicsThreadStackMedium);
-                    opts.joinable = 1;
-
-                    this->monitorThreadId = epicsThreadCreateOpt(
-                        "monitorThread", (EPICSTHREADFUNC)monitorThreadC, this, &opts);
+                    pl_cam_close(this->cameraContext->hcam);
+                    this->cameraContext->isCamOpen = false;
                 }
             }
         }
+
+        if(!this->cameraContext->isCamOpen){
+            cleanupAfterErr(functionName, "Failed to open camera with given serial number!");
+        }
+    } else {
+        // Otherwise, just open based on device index
+        pl_cam_get_name(deviceIndex, this->cameraContext->camName);
+        if (!pl_cam_open(this->cameraContext->camName, &this->cameraContext->hcam,
+                         OPEN_EXCLUSIVE)) {
+            cleanupAfterErr(functionName, "Failed to open camera with given device index!");
+        } else {
+            this->cameraContext->isCamOpen = true;
+            INFO_ARGS("Opened camera...", this->cameraContext->camName);
+        }
     }
+
+    // Camera is opened, collect model number, serial, and firmware information
+    uns16 fwVersion;
+    char fwVersionStr[40];
+    pl_get_param(this->cameraContext->hcam, PARAM_CAM_FW_VERSION, ATTR_CURRENT,
+                 (void *)&fwVersion);
+    snprintf(fwVersionStr, 40, "%d.%d", (fwVersion >> 8) & 0xFF,
+             (fwVersion >> 0) & 0xFF);
+    setStringParam(ADFirmwareVersion, fwVersionStr);
+
+    int32 serialNumber;
+    char serialNumberStr[40];
+    pl_get_param(this->cameraContext->hcam, PARAM_CAMERA_PART_NUMBER, ATTR_CURRENT,
+                 (void *)&serialNumber);
+    snprintf(serialNumberStr, 40, "%d", serialNumber);
+    setStringParam(ADSerialNumber, serialNumberStr);
+
+    char vendorStr[40];
+    pl_get_param(this->cameraContext->hcam, PARAM_VENDOR_NAME, ATTR_CURRENT,
+                 (void *)vendorStr);
+    setStringParam(ADManufacturer, vendorStr);
+
+    char modelStr[40];
+    pl_get_param(this->cameraContext->hcam, PARAM_PRODUCT_NAME, ATTR_CURRENT,
+                 (void *)modelStr);
+    setStringParam(ADModel, modelStr);
+
+    // Attempt to switch to microsecond min exposure resolution
+    setMinExpRes(KTX_MIN_EXP_RES_MS, KTX_MIN_EXP_RES_US);
+
+    // Get info about the interface used to communicate with the camera.
+    KTX_COMM_INTF interface = KTX_INTF_UNKNOWN;
+
+    int32 interfaceId;
+    pl_get_param(this->cameraContext->hcam, PARAM_CAM_INTERFACE_TYPE, ATTR_CURRENT,
+                 (void *)&interfaceId);
+
+    if (interfaceId == PL_CAM_IFC_TYPE_ETHERNET)
+        interface = KTX_INTF_ETHERNET;
+    else if (interfaceId == PL_CAM_IFC_TYPE_VIRTUAL)
+        interface = KTX_INTF_VIRTUAL;
+    else if (interfaceId == PL_CAM_IFC_TYPE_USB_1_1)
+        interface = KTX_INTF_USB_1_1;
+    else if (interfaceId == PL_CAM_IFC_TYPE_USB_2_0)
+        interface = KTX_INTF_USB_2_0;
+    else if (interfaceId == PL_CAM_IFC_TYPE_USB_3_0)
+        interface = KTX_INTF_USB_3_0;
+    else if (interfaceId == PL_CAM_IFC_TYPE_USB_3_1)
+        interface = KTX_INTF_USB_3_1;
+    else if (interfaceId == PL_CAM_IFC_TYPE_PCIE_X1)
+        interface = KTX_INTF_PCIE_x1;
+    else if (interfaceId == PL_CAM_IFC_TYPE_PCIE_X4)
+        interface = KTX_INTF_PCIE_x4;
+    else if (interfaceId == PL_CAM_IFC_TYPE_PCIE_X8)
+        interface = KTX_INTF_PCIE_x8;
+    else if (interfaceId == PL_CAM_IFC_TYPE_PCIE)
+        interface = KTX_INTF_PCIE;
+
+    setIntegerParam(KTX_CommInterface, interface);
+
+    // Get information about connected camera resolution
+    pl_get_param(this->cameraContext->hcam, PARAM_SER_SIZE, ATTR_CURRENT,
+                 (void *)&this->cameraContext->sensorResX);
+    pl_get_param(this->cameraContext->hcam, PARAM_PAR_SIZE, ATTR_CURRENT,
+                 (void *)&this->cameraContext->sensorResY);
+
+    setIntegerParam(ADMaxSizeX, this->cameraContext->sensorResX);
+    setIntegerParam(ADMaxSizeY, this->cameraContext->sensorResY);
+    INFO_ARGS("Model: %s | Resolution: %dx%d", modelStr,
+              this->cameraContext->sensorResX, this->cameraContext->sensorResY);
+
+    INFO("Configuring default region to full sensor size...");
+    setIntegerParam(ADMinX, 0);
+    setIntegerParam(ADMinY, 0);
+    setIntegerParam(ADBinX, 1);
+    setIntegerParam(ADBinY, 1);
+    setIntegerParam(ADSizeX, this->cameraContext->sensorResX);
+    setIntegerParam(ADSizeY, this->cameraContext->sensorResY);
+    setIntegerParam(NDColorMode,
+                    NDColorModeMono);  // Only mono modes currently supported
+    callParamCallbacks();
+    updateCameraRegion();
+
+    // Reset any pre-configured post-processing setup.
+    pl_pp_reset(this->cameraContext->hcam);
+
+    // Retrieve speed table information
+    getSpeedTable();
+    printSpeedTable();
+
+    // Select default speed table mode
+    setIntegerParam(KTX_ReadoutPortIdx, 0);
+    setIntegerParam(KTX_SpeedIdx, 0);
+    setIntegerParam(KTX_GainIdx, 0);
+    selectSpeedTableMode();
+    callParamCallbacks();
+
+    // Register new frame callback function with PVCam SDK
+    if (PV_OK != pl_cam_register_callback_ex3(this->cameraContext->hcam,
+                                              PL_CALLBACK_EOF, (void *)newFrameCallback,
+                                              this->cameraContext)) {
+        cleanupAfterErr(functionName, "Failed to register EOF callback function!");
+    }
+
+    INFO("Registered EOF callback function.");
+
+    // Spawn the monitoring thread. Make sure it's joinable.
+    INFO("Spawning camera monitor thread...");
+    this->monitoringActive = true;
+
+    epicsThreadOpts opts;
+    opts.priority = epicsThreadPriorityMedium;
+    opts.stackSize = epicsThreadGetStackSize(epicsThreadStackMedium);
+    opts.joinable = 1;
+
+    this->monitorThreadId = epicsThreadCreateOpt(
+        "monitorThread", (EPICSTHREADFUNC)monitorThreadC, this, &opts);
 
     epicsAtExit(exitCallbackC, (void *)this);
 }
@@ -1250,14 +1300,14 @@ void ADKinetix::reportKinetixError(const char *functionName) {
 /* Code for iocsh registration */
 
 /* ADKinetixConfig */
-static const iocshArg ADKinetixConfigArg0 = {"DeviceIndex", iocshArgInt};
-static const iocshArg ADKinetixConfigArg1 = {"Port name", iocshArgString};
+static const iocshArg ADKinetixConfigArg0 = {"Port name", iocshArgString};
+static const iocshArg ADKinetixConfigArg1 = {"Camera Id", iocshArgInt};
 static const iocshArg *const ADKinetixConfigArgs[] = {&ADKinetixConfigArg0, &ADKinetixConfigArg1};
 
 static const iocshFuncDef configKinetix = {"ADKinetixConfig", 2, ADKinetixConfigArgs};
 
 static void configKinetixCallFunc(const iocshArgBuf *args) {
-    ADKinetixConfig(args[0].ival, args[1].sval);
+    ADKinetixConfig(args[0].sval, args[1].ival);
 }
 
 static void kinetixRegister(void) { iocshRegister(&configKinetix, configKinetixCallFunc); }

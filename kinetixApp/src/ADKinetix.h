@@ -16,7 +16,7 @@
 
 // Driver version numbers
 #define ADKINETIX_VERSION 1
-#define ADKINETIX_REVISION 1
+#define ADKINETIX_REVISION 2
 #define ADKINETIX_MODIFICATION 0
 
 // Standard Includes
@@ -113,7 +113,7 @@ typedef enum {
 
 class ADKinetix : public ADDriver {
    public:
-    ADKinetix(int deviceIndex, const char* portName);
+    ADKinetix(const char* portName, int cameraId);
 
     /* These are the methods that we override from ADDriver */
     virtual asynStatus writeInt32(asynUser* pasynUser, epicsInt32 value);
@@ -153,6 +153,7 @@ class ADKinetix : public ADDriver {
     void updateImageFormat();
     void updateReadoutPortDesc();
     void selectSpeedTableMode();
+    void cleanupAfterErr(const char* functionName, const char* errorMsg);
 
     void acquireStart();
     void acquireStop();

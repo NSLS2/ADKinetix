@@ -22,8 +22,12 @@ epicsEnvSet("CBUFFS", "500")
 # The search path for database files
 epicsEnvSet("EPICS_DB_INCLUDE_PATH", "$(ADCORE)/db")
 
-ADKinetixConfig(0, "$(PORT)")
+# Configure the areaDetector driver for the Kinetix camera
+ADKinetixConfig("$(PORT)", 0) # Default connection method is by device index, i.e. camera 0, 1, 2 etc.
 dbLoadRecords("$(ADKINETIX)/db/ADKinetix.template", "P=$(PREFIX),R=cam1:,PORT=$(PORT),ADDR=0,TIMEOUT=1")
+
+# Alternatively, use serial number in place of device index.
+#ADKinetixConfig("$(PORT)", "1261252912") # Connection method is by serial number
 
 # Create a standard arrays plugin
 NDStdArraysConfigure("Image1", 1, 0, "$(PORT)", 0, 10000000)
