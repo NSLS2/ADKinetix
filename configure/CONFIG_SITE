@@ -32,6 +32,18 @@ CHECK_RELEASE = YES
 #   take effect.
 #IOCS_APPL_TOP = </IOC/path/to/application/top>
 
+# Define where the PVCam SDK is located
+
+# Linux default
+PVCAM_SDK=/opt/pvcam/sdk
+PVCAM_INCLUDE = $(PVCAM_SDK)/include
+PVCAM_LIB = $(PVCAM_SDK)/library/x86_64
+
+# Windows default
+#PVCAM_SDK="C:/Program Files/Photometrics/PVCamSDK"
+#PVCAM_INCLUDE = $(PVCAM_SDK)/include
+#PVCAM_LIB = $(PVCAM_SDK)/lib/amd64
+
 # Get settings from AREA_DETECTOR, so we only have to configure once for all detectors if we want to
 -include $(AREA_DETECTOR)/configure/CONFIG_SITE
 -include $(AREA_DETECTOR)/configure/CONFIG_SITE.$(EPICS_HOST_ARCH)
