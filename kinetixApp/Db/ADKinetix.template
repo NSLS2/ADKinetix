@@ -117,7 +117,7 @@ record(ai, "$(P)$(R)AcquirePeriod_RBV") {
 
 record(bo, "$(P)$(R)StopAcqOnTimeout") {
     field(DTYP, "asynInt32")
-    field(OUT,  "@asyn($(PORT),$(ADDR),$(TIMEOUT))KTX_STOP_ACQ_ON_TO")
+    field(OUT,  "@asyn($(PORT),$(ADDR=0),$(TIMEOUT=1))KTX_STOP_ACQ_ON_TO")
     field(ZNAM, "No")
     field(ONAM, "Yes")
     field(VAL, "0")
@@ -127,7 +127,7 @@ record(bo, "$(P)$(R)StopAcqOnTimeout") {
 
 record(bi, "$(P)$(R)StopAcqOnTimeout_RBV") {
     field(DTYP, "asynInt32")
-    field(INP,  "@asyn($(PORT),$(ADDR),$(TIMEOUT))KTX_STOP_ACQ_ON_TO")
+    field(INP,  "@asyn($(PORT),$(ADDR=0),$(TIMEOUT=1))KTX_STOP_ACQ_ON_TO")
     field(ZNAM, "No")
     field(ONAM, "Yes")
     field(SCAN, "I/O Intr")
@@ -136,7 +136,7 @@ record(bi, "$(P)$(R)StopAcqOnTimeout_RBV") {
 
 record(ao, "$(P)$(R)WaitForFrameTO") {
     field(DTYP, "asynInt32")
-    field(OUT,  "@asyn($(PORT),$(ADDR),$(TIMEOUT))KTX_WAIT_FOR_FRAME_TO")
+    field(OUT,  "@asyn($(PORT),$(ADDR=0),$(TIMEOUT=1))KTX_WAIT_FOR_FRAME_TO")
     field(VAL, "500")
     field(PINI, "YES")
 }
@@ -144,14 +144,14 @@ record(ao, "$(P)$(R)WaitForFrameTO") {
 
 record(ai, "$(P)$(R)WaitForFrameTO_RBV") {
     field(DTYP, "asynInt32")
-    field(INP,  "@asyn($(PORT),$(ADDR),$(TIMEOUT))KTX_WAIT_FOR_FRAME_TO")
+    field(INP,  "@asyn($(PORT),$(ADDR=0),$(TIMEOUT=1))KTX_WAIT_FOR_FRAME_TO")
     field(SCAN, "I/O Intr")
 }
 
 
 record(ai, "$(P)$(R)Temperature_RBV") {
     field(DTYP, "asynFloat64")
-    field(INP,  "@asyn($(PORT),$(ADDR),$(TIMEOUT))KTX_TEMP")
+    field(INP,  "@asyn($(PORT),$(ADDR=0),$(TIMEOUT=1))KTX_TEMP")
     field(PREC, "3")
     field(SCAN, "I/O Intr")
 }
@@ -159,7 +159,7 @@ record(ai, "$(P)$(R)Temperature_RBV") {
 
 record(mbbo, "$(P)$(R)ReadoutPortIdx") {
     field(DTYP, "asynInt32")
-    field(OUT,  "@asyn($(PORT),$(ADDR),$(TIMEOUT))KTX_READOUT_PORT_IDX")
+    field(OUT,  "@asyn($(PORT),$(ADDR=0),$(TIMEOUT=1))KTX_READOUT_PORT_IDX")
     field(ZRST, "1")
     field(ZRVL, "0")
     field(ONST, "2")
@@ -175,7 +175,7 @@ record(mbbo, "$(P)$(R)ReadoutPortIdx") {
 
 record(mbbi, "$(P)$(R)ReadoutPortIdx_RBV") {
     field(DTYP, "asynInt32")
-    field(INP,  "@asyn($(PORT),$(ADDR),$(TIMEOUT))KTX_READOUT_PORT_IDX")
+    field(INP,  "@asyn($(PORT),$(ADDR=0),$(TIMEOUT=1))KTX_READOUT_PORT_IDX")
     field(ZRST, "1")
     field(ZRVL, "0")
     field(ONST, "2")
@@ -192,21 +192,21 @@ record(waveform, "$(P)$(R)ReadoutMode_RBV") {
     field(DTYP, "asynOctetRead")
     field(FTVL, "CHAR")
     field(NELM, "256")
-    field(INP, "@asyn($(PORT),$(ADDR),$(TIMEOUT))KTX_READOUT_MODE")
+    field(INP, "@asyn($(PORT),$(ADDR=0),$(TIMEOUT=1))KTX_READOUT_MODE")
     field(SCAN, "I/O Intr")
 }
 
 
 record(stringin, "$(P)$(R)ReadoutPortName_RBV") {
     field(DTYP, "asynOctetRead")
-    field(INP, "@asyn($(PORT),$(ADDR),$(TIMEOUT))KTX_READOUT_PORT_DESC")
+    field(INP, "@asyn($(PORT),$(ADDR=0),$(TIMEOUT=1))KTX_READOUT_PORT_DESC")
     field(SCAN, "I/O Intr")
 }
 
 
 record(mbbo, "$(P)$(R)SpeedIdx") {
     field(DTYP, "asynInt32")
-    field(OUT,  "@asyn($(PORT),$(ADDR),$(TIMEOUT))KTX_SPEED_IDX")
+    field(OUT,  "@asyn($(PORT),$(ADDR=0),$(TIMEOUT=1))KTX_SPEED_IDX")
     field(ZRST, "1")
     field(ZRVL, "0")
     field(ONST, "2")
@@ -222,7 +222,7 @@ record(mbbo, "$(P)$(R)SpeedIdx") {
 
 record(mbbi, "$(P)$(R)SpeedIdx_RBV") {
     field(DTYP, "asynInt32")
-    field(INP,  "@asyn($(PORT),$(ADDR),$(TIMEOUT))KTX_SPEED_IDX")
+    field(INP,  "@asyn($(PORT),$(ADDR=0),$(TIMEOUT=1))KTX_SPEED_IDX")
     field(ZRST, "1")
     field(ZRVL, "0")
     field(ONST, "2")
@@ -237,14 +237,14 @@ record(mbbi, "$(P)$(R)SpeedIdx_RBV") {
 
 record(stringin, "$(P)$(R)SpeedDesc_RBV") {
     field(DTYP, "asynOctetRead")
-    field(INP, "@asyn($(PORT),$(ADDR),$(TIMEOUT))KTX_SPEED_DESC")
+    field(INP, "@asyn($(PORT),$(ADDR=0),$(TIMEOUT=1))KTX_SPEED_DESC")
     field(SCAN, "I/O Intr")
 }
 
 
 record(mbbo, "$(P)$(R)GainIdx") {
     field(DTYP, "asynInt32")
-    field(OUT,  "@asyn($(PORT),$(ADDR),$(TIMEOUT))KTX_GAIN_IDX")
+    field(OUT,  "@asyn($(PORT),$(ADDR=0),$(TIMEOUT=1))KTX_GAIN_IDX")
     field(ZRST, "1")
     field(ZRVL, "0")
     field(ONST, "2")
@@ -260,7 +260,7 @@ record(mbbo, "$(P)$(R)GainIdx") {
 
 record(mbbi, "$(P)$(R)GainIdx_RBV") {
     field(DTYP, "asynInt32")
-    field(INP,  "@asyn($(PORT),$(ADDR),$(TIMEOUT))KTX_GAIN_IDX")
+    field(INP,  "@asyn($(PORT),$(ADDR=0),$(TIMEOUT=1))KTX_GAIN_IDX")
     field(ZRST, "1")
     field(ZRVL, "0")
     field(ONST, "2")
@@ -275,7 +275,7 @@ record(mbbi, "$(P)$(R)GainIdx_RBV") {
 
 record(mbbo, "$(P)$(R)MinExpRes") {
     field(DTYP, "asynInt32")
-    field(OUT,  "@asyn($(PORT),$(ADDR),$(TIMEOUT))KTX_MIN_EXP_RES")
+    field(OUT,  "@asyn($(PORT),$(ADDR=0),$(TIMEOUT=1))KTX_MIN_EXP_RES")
     field(ZRST, "s")
     field(ZRVL, "0")
     field(ONST, "ms")
@@ -289,7 +289,7 @@ record(mbbo, "$(P)$(R)MinExpRes") {
 
 record(mbbi, "$(P)$(R)MinExpRes_RBV") {
     field(DTYP, "asynInt32")
-    field(INP,  "@asyn($(PORT),$(ADDR),$(TIMEOUT))KTX_MIN_EXP_RES")
+    field(INP,  "@asyn($(PORT),$(ADDR=0),$(TIMEOUT=1))KTX_MIN_EXP_RES")
     field(ZRST, "s")
     field(ZRVL, "0")
     field(ONST, "ms")
@@ -302,7 +302,7 @@ record(mbbi, "$(P)$(R)MinExpRes_RBV") {
 
 record(stringin, "$(P)$(R)GainDesc_RBV") {
     field(DTYP, "asynOctetRead")
-    field(INP, "@asyn($(PORT),$(ADDR),$(TIMEOUT))KTX_GAIN_DESC")
+    field(INP, "@asyn($(PORT),$(ADDR=0),$(TIMEOUT=1))KTX_GAIN_DESC")
     field(SCAN, "I/O Intr")
 }
 
@@ -310,7 +310,7 @@ record(stringin, "$(P)$(R)GainDesc_RBV") {
 record(bo, "$(P)$(R)ApplyReadoutMode") {
     field(DTYP, "asynInt32")
     field(DESC, "Apply currently selected operating mode")
-    field(OUT, "@asyn($(PORT),$(ADDR),$(TIMEOUT))KTX_APPLY_MODE")
+    field(OUT, "@asyn($(PORT),$(ADDR=0),$(TIMEOUT=1))KTX_APPLY_MODE")
     field(ZNAM, "Cancel")
     field(ONAM, "Apply")
     field(VAL,  "0")
@@ -320,7 +320,7 @@ record(bo, "$(P)$(R)ApplyReadoutMode") {
 record(bi, "$(P)$(R)ReadoutModeValid_RBV") {
     field(DTYP, "asynInt32")
     field(DESC, "Apply currently selected operating mode")
-    field(INP, "@asyn($(PORT),$(ADDR),$(TIMEOUT))KTX_MODE_VALID")
+    field(INP, "@asyn($(PORT),$(ADDR=0),$(TIMEOUT=1))KTX_MODE_VALID")
     field(ZNAM, "Invalid")
     field(ONAM, "Valid")
     field(SCAN, "I/O Intr")
@@ -330,7 +330,7 @@ record(bi, "$(P)$(R)ReadoutModeValid_RBV") {
 record(mbbi, "$(P)$(R)SelectedInterface_RBV") {
     field(DTYP, "asynInt32")
     field(DESC, "Current camera communication interface")
-    field(INP, "@asyn($(PORT),$(ADDR),$(TIMEOUT))KTX_INTERFACE")
+    field(INP, "@asyn($(PORT),$(ADDR=0),$(TIMEOUT=1))KTX_INTERFACE")
     field(ZRST, "Unknown")
     field(ZRVL, "0")
     field(ONST, "USB")
@@ -361,13 +361,13 @@ record(mbbi, "$(P)$(R)SelectedInterface_RBV") {
 record(mbbo, "$(P)$(R)FanSpeed"){
     field(DESC, "Fan speed controls")
     field(DTYP, "asynInt32")
-    field(OUT, "@asyn($(PORT),$(ADDR),$(TIMEOUT))KTX_FAN_SPEED")
+    field(OUT, "@asyn($(PORT),$(ADDR=0),$(TIMEOUT=1))KTX_FAN_SPEED")
     field(VAL, "0")
 }
 
 record(mbbi, "$(P)$(R)FanSpeed_RBV"){
     field(DESC, "Fan speed controls")
     field(DTYP, "asynInt32")
-    field(INP, "@asyn($(PORT),$(ADDR),$(TIMEOUT))KTX_FAN_SPEED")
+    field(INP, "@asyn($(PORT),$(ADDR=0),$(TIMEOUT=1))KTX_FAN_SPEED")
     field(SCAN, "I/O Intr")
 }
