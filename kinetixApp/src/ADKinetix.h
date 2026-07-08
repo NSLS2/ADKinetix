@@ -28,6 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <atomic>
 #include <condition_variable>
 #include <mutex>
 
@@ -164,10 +165,10 @@ class ADKinetix : public ADDriver {
 
     NDDataType_t getCurrentNDBitDepth();
     CameraContext* cameraContext;
-    bool acquisitionActive = false;
+    std::atomic<bool> acquisitionActive{false};
     bool speedTableModeSelected = false;
-    bool pollingTemperature = false;
-    bool monitoringActive = false;
+    std::atomic<bool> pollingTemperature{false};
+    std::atomic<bool> monitoringActive{false};
     int deviceIndex;
     void* frameBuffer = nullptr;
     epicsThreadId monitorThreadId, acquisitionThreadId;

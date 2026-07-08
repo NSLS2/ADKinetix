@@ -456,13 +456,13 @@ void ADKinetix::updateImageFormat() {
 static void PV_DECL newFrameCallback(FRAME_INFO *pFrameInfo, CameraContext *ctx) {
     if (ctx == nullptr) return;
 
+    std::lock_guard<std::mutex> lock(ctx->eofEvent.mutex);
     ctx->eofFrameInfo = *pFrameInfo;
 
     // Get reference to latest frame
     if (PV_OK != pl_exp_get_latest_frame(ctx->hcam, &ctx->eofFrame)) {
         ctx->eofFrame = nullptr;
     } else {
-        std::lock_guard<std::mutex> lock(ctx->eofEvent.mutex);
         ctx->eofEvent.flag = true;
     }
 
@@ -885,8 +885,8 @@ void ADKinetix::acquisitionThread() {
     this->acquisitionActive = true;
 
     // Spin in place a bit to make sure the temp thread is not actively polling the camera
-    while (this->pollingTemperature)
-        ;
+    while (this->pollingTemperature.load(std::memory_order_acquire))
+        epicsThreadSleep(0.001);
 
     INFO("Acquisition thread active.");
 
@@ -896,33 +896,69 @@ void ADKinetix::acquisitionThread() {
 
     // In single mode, use exposure setup API call
     if (acquisitionMode == ADImageSingle) {
-        pl_exp_setup_seq(this->cameraContext->hcam, 1, 1, &this->cameraContext->region,
-                         pvcamExposureMode, (uns32) (exposureTime * pow(1000, minExpRes)),
-                         &frameBufferSize);
+        if (PV_OK != pl_exp_setup_seq(this->cameraContext->hcam, 1, 1,
+                                      &this->cameraContext->region, pvcamExposureMode,
+                                      (uns32) (exposureTime * pow(1000, minExpRes)),
+                                      &frameBufferSize)) {
+            reportKinetixError(functionName);
+            this->acquisitionActive = false;
+            setIntegerParam(ADStatus, ADStatusError);
+            setIntegerParam(ADAcquire, 0);
+            callParamCallbacks();
+            return;
+        }
 
         // Allocate frame buffer
         this->frameBuffer = (uns8 *) calloc(1, (size_t) frameBufferSize);
+        if (!this->frameBuffer) {
+            ERR("Failed to allocate frame buffer!");
+            this->acquisitionActive = false;
+            setIntegerParam(ADStatus, ADStatusError);
+            setIntegerParam(ADAcquire, 0);
+            callParamCallbacks();
+            return;
+        }
         INFO_ARGS("Allocated frame buffer of size %d...", frameBufferSize);
 
         if (PV_OK != pl_exp_start_seq(this->cameraContext->hcam, this->frameBuffer)) {
             reportKinetixError(functionName);
+            free(this->frameBuffer);
+            this->frameBuffer = nullptr;
             this->acquisitionActive = false;
         }
     } else {
         // In continuous mode set up cont acq w/ circ buffer
-        pl_exp_setup_cont(this->cameraContext->hcam, 1, &this->cameraContext->region,
-                          pvcamExposureMode, (uns32) (exposureTime * pow(1000, minExpRes)),
-                          &frameBufferSize, circBuffMode);
+        if (PV_OK != pl_exp_setup_cont(this->cameraContext->hcam, 1,
+                                       &this->cameraContext->region, pvcamExposureMode,
+                                       (uns32) (exposureTime * pow(1000, minExpRes)),
+                                       &frameBufferSize, circBuffMode)) {
+            reportKinetixError(functionName);
+            this->acquisitionActive = false;
+            setIntegerParam(ADStatus, ADStatusError);
+            setIntegerParam(ADAcquire, 0);
+            callParamCallbacks();
+            return;
+        }
 
         // Allocate entire circular buffer
         this->frameBuffer = (uns8 *) calloc(
             KTX_CIRC_BUFF_SIZE, (size_t) frameBufferSize);  // Allocate memory for circular buffer
+        if (!this->frameBuffer) {
+            ERR("Failed to allocate circular buffer!");
+            this->acquisitionActive = false;
+            setIntegerParam(ADStatus, ADStatusError);
+            setIntegerParam(ADAcquire, 0);
+            callParamCallbacks();
+            return;
+        }
         INFO_ARGS("Allocated circular buffer for %d frames. Total size: %d bytes.",
                   KTX_CIRC_BUFF_SIZE, frameBufferSize * KTX_CIRC_BUFF_SIZE);
 
         if (PV_OK != pl_exp_start_cont(this->cameraContext->hcam, this->frameBuffer,
                                        KTX_CIRC_BUFF_SIZE * frameBufferSize)) {
             reportKinetixError(functionName);
+            free(this->frameBuffer);
+            this->frameBuffer = nullptr;
             this->acquisitionActive = false;
         }
     }
@@ -1019,6 +1055,7 @@ void ADKinetix::acquisitionThread() {
 
     INFO("Acquisition done. Freeing framebuffers.");
     free(this->frameBuffer);
+    this->frameBuffer = nullptr;
 
     setIntegerParam(ADStatus, ADStatusIdle);
     setIntegerParam(ADAcquire, 0);
