@@ -90,10 +90,12 @@ static void exitCallbackC(void *drvPvt) {
  * @brief Function that blocks until either timeout is reached, or new frame callback is detected
  *
  * @param timeoutMs Time to wait before returning in ms
+ * @param pendingFrames Set to the number of frames still pending after this call
+ * @param frameNr Set to the camera FrameNr of the consumed EOF event
  * @return true if frame successfully was awaited
  * @return false if acquisition was aborted or timed out
  */
-bool ADKinetix::waitForEofEvent(uns32 timeoutMs) {
+bool ADKinetix::waitForEofEvent(uns32 timeoutMs, uns32 *pendingFrames, int32 *frameNr) {
     const char *functionName = "waitForEofEvent";
 
     std::unique_lock<std::mutex> lock(this->cameraContext->eofEvent.mutex);
@@ -101,19 +103,19 @@ bool ADKinetix::waitForEofEvent(uns32 timeoutMs) {
         this->cameraContext;  // For lambda we need temporary local reference to ctx pointer
     this->cameraContext->eofEvent.cond.wait_for(
         lock, std::chrono::milliseconds(timeoutMs),
-        [ctx]() { return ctx->eofEvent.flag || ctx->threadAbortFlag; });
+        [ctx]() { return !ctx->pendingFrameNrs.empty() || ctx->threadAbortFlag; });
+    *pendingFrames = (uns32) this->cameraContext->pendingFrameNrs.size();
     if (!this->acquisitionActive) {
         DEBUG_ARGS("Acquisition completed on camera %d\n", this->cameraContext->hcam);
         return false;
     }
-    if (!this->cameraContext->eofEvent.flag) {
+    if (this->cameraContext->pendingFrameNrs.empty()) {
         WARN_ARGS("Camera %d timed out waiting for a frame\n", this->cameraContext->hcam);
         return false;
     }
-    this->cameraContext->eofEvent.flag = false;  // Reset flag
-    if (!this->cameraContext->eofFrame) {
-        return false;
-    }
+    *frameNr = this->cameraContext->pendingFrameNrs.front();
+    this->cameraContext->pendingFrameNrs.pop_front();
+    *pendingFrames = (uns32) this->cameraContext->pendingFrameNrs.size();
     return true;
 }
 
@@ -456,14 +458,10 @@ void ADKinetix::updateImageFormat() {
 static void PV_DECL newFrameCallback(FRAME_INFO *pFrameInfo, CameraContext *ctx) {
     if (ctx == nullptr) return;
 
-    ctx->eofFrameInfo = *pFrameInfo;
-
-    // Get reference to latest frame
-    if (PV_OK != pl_exp_get_latest_frame(ctx->hcam, &ctx->eofFrame)) {
-        ctx->eofFrame = nullptr;
-    } else {
+    // Queue every EOF so back-to-back frames are not coalesced into one event
+    {
         std::lock_guard<std::mutex> lock(ctx->eofEvent.mutex);
-        ctx->eofEvent.flag = true;
+        ctx->pendingFrameNrs.push_back(pFrameInfo != nullptr ? pFrameInfo->FrameNr : -1);
     }
 
     // Notify acquisition thread of new frame event
@@ -542,6 +540,10 @@ ADKinetix::ADKinetix(int deviceIndex, const char *portName)
     createParam(KTX_SpeedIdxString, asynParamInt32, &KTX_SpeedIdx);
     createParam(KTX_GainIdxString, asynParamInt32, &KTX_GainIdx);
     createParam(KTX_GainDescString, asynParamOctet, &KTX_GainDesc);
+    createParam(KTX_DroppedFramesString, asynParamInt32, &KTX_DroppedFrames);
+    createParam(KTX_PendingFramesString, asynParamInt32, &KTX_PendingFrames);
+    createParam(KTX_UniqueIdSourceString, asynParamInt32, &KTX_UniqueIdSource);
+    createParam(KTX_CircBuffSizeString, asynParamInt32, &KTX_CircBuffSize);
 
     // Initialize the PVCam SDK
     if (!pl_pvcam_init()) {
@@ -716,14 +718,19 @@ void ADKinetix::monitorThread() {
         if (!this->acquisitionActive) {
             this->pollingTemperature = true;
             int16 temperature = 0;
-            if (PV_OK != pl_get_param(this->cameraContext->hcam, PARAM_TEMP, ATTR_CURRENT,
-                                      (void *) &temperature)) {
+            bool ok = PV_OK == pl_get_param(this->cameraContext->hcam, PARAM_TEMP, ATTR_CURRENT,
+                                            (void *) &temperature);
+            // Clear before locking: acquisitionThread spins on this flag while holding the lock
+            this->pollingTemperature = false;
+
+            this->lock();
+            if (!ok) {
                 reportKinetixError(functionName);
             } else {
                 setDoubleParam(KTX_Temperature, (double) (temperature / 100.0));
                 callParamCallbacks();
             }
-            this->pollingTemperature = false;
+            this->unlock();
         }
 
         epicsThreadSleep(1);
@@ -761,9 +768,11 @@ void ADKinetix::acquireStop() {
         // Mark acquisition as inactive
         this->acquisitionActive = false;
 
-        // Wait for acquisition thread to join
+        // Acquisition thread needs the port lock to finish, so release it while joining
         INFO("Waiting for acquisition thread to join...");
+        this->unlock();
         epicsThreadMustJoin(this->acquisitionThreadId);
+        this->lock();
         INFO("Acquisition stopped.");
 
         // Refresh all PV values
@@ -844,12 +853,21 @@ void ADKinetix::acquisitionThread() {
     int16 pvcamExposureMode;
     NDArray *pArray;
     NDArrayInfo arrayInfo;
+    FRAME_INFO *pFrameInfo = nullptr;
+    int32 lastFrameNr = -1;
+    int32 frameNr = 0;
+    uns32 pendingFrames = 0;
+    int droppedFrames = 0;
+    int uniqueIdSource;
+    int circBuffSize;
 
     // Retrieve current frame information
     uns32 frameBufferSize;
     size_t dims[2];
     NDColorMode_t colorMode = NDColorModeMono;  // only grayscale at the moment
     NDDataType_t dataType;
+
+    this->lock();
     getIntegerParam(NDDataType, (int *) &dataType);
 
     getCurrentFrameDimensions(dims);
@@ -860,6 +878,7 @@ void ADKinetix::acquisitionThread() {
         setIntegerParam(ADStatus, ADStatusError);
         setIntegerParam(ADAcquire, 0);
         callParamCallbacks();
+        this->unlock();
         return;
     }
 
@@ -871,6 +890,8 @@ void ADKinetix::acquisitionThread() {
     getIntegerParam(KTX_StopAcqOnTimeout, &stopAcqOnTO);
     getIntegerParam(KTX_WaitForFrameTimeout, &waitForFrameTO);
     getIntegerParam(KTX_MinExpRes, &minExpRes);
+    getIntegerParam(KTX_UniqueIdSource, &uniqueIdSource);
+    getIntegerParam(KTX_CircBuffSize, &circBuffSize);
 
     // Convert EPICS selected trigger mode to PvCam format
     if (triggerMode == KTX_TRIG_INTERNAL)
@@ -880,7 +901,9 @@ void ADKinetix::acquisitionThread() {
     else
         pvcamExposureMode = EXT_TRIG_LEVEL | EXPOSE_OUT_FIRST_ROW;
 
-    const int16 circBuffMode = CIRC_OVERWRITE;
+    // On overrun PVCam still overwrites the oldest frame, but get_oldest_frame_ex then returns an error
+    const int16 circBuffMode = CIRC_NO_OVERWRITE;
+    const bool continuousMode = (acquisitionMode != ADImageSingle);
 
     this->acquisitionActive = true;
 
@@ -892,7 +915,16 @@ void ADKinetix::acquisitionThread() {
 
     INFO("Resetting image counter...");
     setIntegerParam(ADNumImagesCounter, 0);
+    setIntegerParam(KTX_DroppedFrames, 0);
+    setIntegerParam(KTX_PendingFrames, 0);
     callParamCallbacks();
+
+    // Discard any EOF events left over from a previous acquisition
+    {
+        std::lock_guard<std::mutex> lock(this->cameraContext->eofEvent.mutex);
+        this->cameraContext->pendingFrameNrs.clear();
+        this->cameraContext->threadAbortFlag = false;
+    }
 
     // In single mode, use exposure setup API call
     if (acquisitionMode == ADImageSingle) {
@@ -914,16 +946,31 @@ void ADKinetix::acquisitionThread() {
                           pvcamExposureMode, (uns32) (exposureTime * pow(1000, minExpRes)),
                           &frameBufferSize, circBuffMode);
 
-        // Allocate entire circular buffer
-        this->frameBuffer = (uns8 *) calloc(
-            KTX_CIRC_BUFF_SIZE, (size_t) frameBufferSize);  // Allocate memory for circular buffer
-        INFO_ARGS("Allocated circular buffer for %d frames. Total size: %d bytes.",
-                  KTX_CIRC_BUFF_SIZE, frameBufferSize * KTX_CIRC_BUFF_SIZE);
+        // Allocate entire circular buffer; PVCam takes its total size as uns32
+        uint64_t circBuffBytes = (uint64_t) circBuffSize * frameBufferSize;
+        if (circBuffSize < 1 || circBuffBytes > UINT32_MAX) {
+            ERR_ARGS("Invalid circular buffer size of %d frames (%llu bytes)! Can be at most %u bytes.", circBuffSize,
+                     (unsigned long long) circBuffBytes, UINT32_MAX);
+            this->frameBuffer = nullptr;
+        } else {
+            this->frameBuffer = (uns8 *) calloc((size_t) circBuffSize, (size_t) frameBufferSize);
+        }
 
-        if (PV_OK != pl_exp_start_cont(this->cameraContext->hcam, this->frameBuffer,
-                                       KTX_CIRC_BUFF_SIZE * frameBufferSize)) {
+        if (!this->frameBuffer) {
+            ERR("Failed to allocate circular buffer!");
+            setIntegerParam(ADStatus, ADStatusError);
+            this->acquisitionActive = false;
+        } else if (PV_OK != pl_create_frame_info_struct(&pFrameInfo)) {
             reportKinetixError(functionName);
             this->acquisitionActive = false;
+        } else {
+            INFO_ARGS("Allocated circular buffer for %d frames. Total size: %llu bytes.",
+                      circBuffSize, (unsigned long long) circBuffBytes);
+            if (PV_OK != pl_exp_start_cont(this->cameraContext->hcam, this->frameBuffer,
+                                           (uns32) circBuffBytes)) {
+                reportKinetixError(functionName);
+                this->acquisitionActive = false;
+            }
         }
     }
 
@@ -938,8 +985,38 @@ void ADKinetix::acquisitionThread() {
         getIntegerParam(ADNumImagesCounter, &collectedImages);
 
         // Wait for new frame EOF event notification from callback
-        eofSuccess = this->waitForEofEvent((uns32) waitForFrameTO);
+        this->unlock();
+        eofSuccess = this->waitForEofEvent((uns32) waitForFrameTO, &pendingFrames, &frameNr);
+        this->lock();
+        setIntegerParam(KTX_PendingFrames, (int) pendingFrames);
         if (eofSuccess) {
+            void *pFrame = this->frameBuffer;
+            if (continuousMode) {
+                if (PV_OK != pl_exp_get_oldest_frame_ex(this->cameraContext->hcam, &pFrame,
+                                                        pFrameInfo)) {
+                    // Expected after acquireStop() aborts the acquisition
+                    if (this->acquisitionActive) reportKinetixError(functionName);
+                    // EOF count no longer matches buffered frames; resync on the next EOF
+                    {
+                        std::lock_guard<std::mutex> lock(this->cameraContext->eofEvent.mutex);
+                        this->cameraContext->pendingFrameNrs.clear();
+                    }
+                    setIntegerParam(KTX_PendingFrames, 0);
+                    callParamCallbacks();
+                    continue;
+                }
+
+                // get_oldest_frame_ex fills FRAME_INFO for the newest frame, so use the EOF callback's FrameNr
+                if (lastFrameNr >= 0 && frameNr > lastFrameNr + 1) {
+                    int missed = frameNr - lastFrameNr - 1;
+                    droppedFrames += missed;
+                    setIntegerParam(KTX_DroppedFrames, droppedFrames);
+                    WARN_ARGS("Dropped %d frame(s) between frame %d and frame %d", missed,
+                              lastFrameNr, frameNr);
+                }
+                lastFrameNr = frameNr;
+            }
+
             // Allocate the NDArray of the correct size
             this->pArrays[0] = pNDArrayPool->alloc(2, dims, dataType, 0, NULL);
             if (this->pArrays[0] != NULL) {
@@ -947,10 +1024,13 @@ void ADKinetix::acquisitionThread() {
             } else {
                 ERR("Failed to allocate array!");
                 setIntegerParam(ADStatus, ADStatusError);
-                if (acquisitionMode == ADImageSingle)
+                if (acquisitionMode == ADImageSingle) {
                     pl_exp_finish_seq(this->cameraContext->hcam, this->frameBuffer, 0);
-                else
+                } else {
+                    pl_exp_unlock_oldest_frame(this->cameraContext->hcam);
                     pl_exp_abort(this->cameraContext->hcam, CCS_HALT);
+                }
+                this->acquisitionActive = false;
                 callParamCallbacks();
                 break;
             }
@@ -968,8 +1048,10 @@ void ADKinetix::acquisitionThread() {
 
             setIntegerParam(ADStatus, ADStatusAcquire);
 
-            // Copy data from eofFrame to pArray
-            memcpy(pArray->pData, this->cameraContext->eofFrame, arrayInfo.totalBytes);
+            // Copy the frame, then release its circular buffer slot back to PVCam
+            memcpy(pArray->pData, pFrame, arrayInfo.totalBytes);
+            if (continuousMode && PV_OK != pl_exp_unlock_oldest_frame(this->cameraContext->hcam))
+                reportKinetixError(functionName);
 
             // increment the array counter
             int arrayCounter;
@@ -977,16 +1059,19 @@ void ADKinetix::acquisitionThread() {
             arrayCounter++;
             setIntegerParam(NDArrayCounter, arrayCounter);
 
-            // set the image unique ID to the number in the sequence
-            pArray->uniqueId = arrayCounter;
+            // set the image unique ID to either the camera frame number or the array counter
+            pArray->uniqueId =
+                (uniqueIdSource == KTX_UID_ARRAY_COUNTER) ? arrayCounter : (int) frameNr;
 
             pArray->pAttributeList->add("ColorMode", "Color Mode", NDAttrInt32, &colorMode);
 
             // Sends image to the ArrayDataPV
             getAttributes(pArray->pAttributeList);
 
-            // Perform callbacks on collected frame
+            // Perform callbacks on collected frame; plugins must not run under the driver lock
+            this->unlock();
             doCallbacksGenericPointer(pArray, NDArrayData, 0);
+            this->lock();
 
             // If in single mode, finish acq, if in multiple mode and reached target number
             // complete acquisition.
@@ -1018,11 +1103,14 @@ void ADKinetix::acquisitionThread() {
     }
 
     INFO("Acquisition done. Freeing framebuffers.");
+    if (pFrameInfo != nullptr) pl_release_frame_info_struct(pFrameInfo);
     free(this->frameBuffer);
 
     setIntegerParam(ADStatus, ADStatusIdle);
     setIntegerParam(ADAcquire, 0);
+    setIntegerParam(KTX_PendingFrames, 0);
     callParamCallbacks();
+    this->unlock();
 }
 
 /**
@@ -1105,11 +1193,12 @@ asynStatus ADKinetix::readEnum(asynUser *pasynUser, char *strings[], int values[
 asynStatus ADKinetix::writeInt32(asynUser *pasynUser, epicsInt32 value) {
     const char *functionName = "writeInt32";
     int function = pasynUser->reason;
-    int currentExpRes, acquiring;
+    int currentExpRes, acquiring, prevCircBuffSize;
     asynStatus status = asynSuccess;
 
     // Need to know current exp res when switching in case we cannot update
     getIntegerParam(KTX_MinExpRes, &currentExpRes);
+    getIntegerParam(KTX_CircBuffSize, &prevCircBuffSize);
 
     // Certain actions depend on whether or not we are currently acquiring
     getIntegerParam(ADAcquire, &acquiring);
@@ -1156,6 +1245,16 @@ asynStatus ADKinetix::writeInt32(asynUser *pasynUser, epicsInt32 value) {
             }
         } else {
             ERR("Changing fan speed while acquiring is not permitted!");
+        }
+    } else if (function == KTX_CircBuffSize) {
+        if (acquiring) {
+            ERR("Changing circular buffer size while acquiring is not permitted!");
+            setIntegerParam(KTX_CircBuffSize, prevCircBuffSize);
+            status = asynError;
+        } else if (value < 1) {
+            ERR_ARGS("Circular buffer size must be at least 1 frame, got %d!", value);
+            setIntegerParam(KTX_CircBuffSize, prevCircBuffSize);
+            status = asynError;
         }
     } else if (function == ADBinX || function == ADBinY || function == ADMinX ||
                function == ADMinY || function == ADSizeX || function == ADSizeY) {
@@ -1244,8 +1343,10 @@ void ADKinetix::report(FILE *fp, int details) {
 ADKinetix::~ADKinetix() {
     const char *functionName = "~ADKinetix";
 
-    // Stop acquisiton if active
+    // Stop acquisiton if active; acquireStop expects the port lock to be held
+    this->lock();
     this->acquireStop();
+    this->unlock();
 
     // shut down separate threads
     this->monitoringActive = false;

@@ -149,6 +149,61 @@ record(ai, "$(P)$(R)WaitForFrameTO_RBV") {
 }
 
 
+record(longin, "$(P)$(R)DroppedFrames_RBV") {
+    field(DTYP, "asynInt32")
+    field(DESC, "Frames lost before driver readout")
+    field(INP,  "@asyn($(PORT),$(ADDR=0),$(TIMEOUT=1))KTX_DROPPED_FRAMES")
+    field(SCAN, "I/O Intr")
+}
+
+
+record(longin, "$(P)$(R)PendingFrames_RBV") {
+    field(DTYP, "asynInt32")
+    field(DESC, "Frames awaiting driver readout")
+    field(INP,  "@asyn($(PORT),$(ADDR=0),$(TIMEOUT=1))KTX_PENDING_FRAMES")
+    field(SCAN, "I/O Intr")
+}
+
+
+record(bo, "$(P)$(R)UniqueIdSource") {
+    field(DTYP, "asynInt32")
+    field(DESC, "Source of NDArray UniqueId")
+    field(OUT,  "@asyn($(PORT),$(ADDR=0),$(TIMEOUT=1))KTX_UNIQUE_ID_SRC")
+    field(ZNAM, "Camera")
+    field(ONAM, "Array Counter")
+    field(VAL,  "0")
+    field(PINI, "YES")
+}
+
+
+record(bi, "$(P)$(R)UniqueIdSource_RBV") {
+    field(DTYP, "asynInt32")
+    field(DESC, "Source of NDArray UniqueId")
+    field(INP,  "@asyn($(PORT),$(ADDR=0),$(TIMEOUT=1))KTX_UNIQUE_ID_SRC")
+    field(ZNAM, "Camera")
+    field(ONAM, "Array Counter")
+    field(SCAN, "I/O Intr")
+}
+
+
+record(longout, "$(P)$(R)CircBuffSize") {
+    field(DTYP, "asynInt32")
+    field(DESC, "Circular buffer size in frames")
+    field(OUT,  "@asyn($(PORT),$(ADDR=0),$(TIMEOUT=1))KTX_CIRC_BUFF_SIZE")
+    field(DRVL, "1")
+    field(VAL,  "50")
+    field(PINI, "YES")
+}
+
+
+record(longin, "$(P)$(R)CircBuffSize_RBV") {
+    field(DTYP, "asynInt32")
+    field(DESC, "Circular buffer size in frames")
+    field(INP,  "@asyn($(PORT),$(ADDR=0),$(TIMEOUT=1))KTX_CIRC_BUFF_SIZE")
+    field(SCAN, "I/O Intr")
+}
+
+
 record(ai, "$(P)$(R)Temperature_RBV") {
     field(DTYP, "asynFloat64")
     field(INP,  "@asyn($(PORT),$(ADDR=0),$(TIMEOUT=1))KTX_TEMP")

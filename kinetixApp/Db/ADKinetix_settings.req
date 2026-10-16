@@ -6,3 +6,5 @@ $(P)$(R)MinExpRes
 $(P)$(R)StopAcqOnTimeout
 $(P)$(R)WaitForFrameTO
 $(P)$(R)FanSpeed
+$(P)$(R)UniqueIdSource
+$(P)$(R)CircBuffSize

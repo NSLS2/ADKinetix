@@ -24,6 +24,7 @@
 #include <math.h>
 #include <stdarg.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,9 +53,6 @@
 // Helper data structure definitions
 #include "ADKinetixDS.h"
 
-// Size of the continuous acquisition circular buffer
-#define KTX_CIRC_BUFF_SIZE 50
-
 // Driver name
 static const char* driverName = "ADKinetix";
 
@@ -65,6 +63,18 @@ static const char* driverName = "ADKinetix";
 // Acquisition new frame timeout signals
 #define KTX_StopAcqOnTimeoutString "KTX_STOP_ACQ_ON_TO"
 #define KTX_WaitForFrameTimeoutString "KTX_WAIT_FOR_FRAME_TO"
+
+// Frames lost by the camera/SDK before the driver could read them
+#define KTX_DroppedFramesString "KTX_DROPPED_FRAMES"
+
+// EOF events received from PVCam but not yet read out by the driver
+#define KTX_PendingFramesString "KTX_PENDING_FRAMES"
+
+// Selects the source of NDArray uniqueId
+#define KTX_UniqueIdSourceString "KTX_UNIQUE_ID_SRC"
+
+// Number of frames in the continuous acquisition circular buffer
+#define KTX_CircBuffSizeString "KTX_CIRC_BUFF_SIZE"
 
 // Communication interface signal
 #define KTX_CommInterfaceString "KTX_INTERFACE"
@@ -111,6 +121,12 @@ typedef enum {
     KTX_MIN_EXP_RES_US = 2,
 } KTX_MIN_EXP_RES;
 
+// Source for NDArray uniqueId
+typedef enum {
+    KTX_UID_FRAME_NR = 0,
+    KTX_UID_ARRAY_COUNTER = 1,
+} KTX_UNIQUE_ID_SRC;
+
 class ADKinetix : public ADDriver {
    public:
     ADKinetix(int deviceIndex, const char* portName);
@@ -124,7 +140,7 @@ class ADKinetix : public ADDriver {
     void monitorThread();
     void acquisitionThread();
     ~ADKinetix();
-    bool waitForEofEvent(uns32 timeoutMs);
+    bool waitForEofEvent(uns32 timeoutMs, uns32* pendingFrames, int32* frameNr);
 
    protected:
     int KTX_Temperature;
@@ -143,7 +159,11 @@ class ADKinetix : public ADDriver {
     int KTX_SpeedDesc;
     int KTX_GainIdx;
     int KTX_GainDesc;
-#define LAST_KTX_PARAM KTX_GainDesc
+    int KTX_DroppedFrames;
+    int KTX_PendingFrames;
+    int KTX_UniqueIdSource;
+    int KTX_CircBuffSize;
+#define LAST_KTX_PARAM KTX_CircBuffSize
 
    private:
     void reportKinetixError(const char* functionName);
